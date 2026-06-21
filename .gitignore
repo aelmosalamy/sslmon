@@ -1,0 +1,11 @@
+# Build output
+sslmon
+sslmon.exe
+
+# Checkpoint / state files
+*-state.json
+*-state.json.tmp
+
+# Query result cache
+*-cache.json
+*-cache.json.tmp
