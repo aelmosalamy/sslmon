@@ -9,3 +9,5 @@ sslmon.exe
 # Query result cache
 *-cache.json
 *-cache.json.tmp
+
+CLAUDE.md

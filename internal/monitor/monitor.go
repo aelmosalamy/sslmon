@@ -23,8 +23,15 @@ import (
 	"github.com/google/certificate-transparency-go/x509"
 
 	"sslmon/internal/loglist"
-	"sslmon/internal/state"
 )
+
+// Checkpoints records how far each CT log has been read. It is satisfied by
+// store.Store; the interface keeps this package from depending on the on-disk
+// store directly.
+type Checkpoints interface {
+	Next(logURL string) (index int64, ok bool)
+	SetNext(logURL string, index int64)
+}
 
 const (
 	defaultBatchSize    = 1000
@@ -48,7 +55,7 @@ type Monitor struct {
 	Domain     string
 	Exact      bool
 	Logs       []loglist.Log
-	State      *state.Store
+	State      Checkpoints
 	HTTPClient *http.Client
 
 	// Continuous keeps tailing each log as it grows. When false, each log is

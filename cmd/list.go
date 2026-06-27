@@ -3,69 +3,84 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"sslmon/internal/certcache"
 	"sslmon/internal/crtsh"
 	"sslmon/internal/monitor"
+	"sslmon/internal/store"
 )
 
 // runList is sslmon's default action. With a domain it lists that domain's
 // certificates (from crt.sh, cached); with no domain it browses everything in
-// the local cache. -i opens an interactive list instead of printing rows.
+// the local store. -i opens an interactive list instead of printing rows.
 func runList(ctx context.Context, args []string) error {
 	fs := newFlagSet("list", "[flags] <domain>",
 		"List a domain's certificates (via crt.sh). With no domain, browse the whole cache.")
 	var (
-		since       = fs.String("since", "2y", "how far back to include: e.g. 90d, 6w, 3m, 1y")
-		exact       = fs.Bool("exact", false, "match only the exact domain, not subdomains")
-		interactive = fs.BoolP("interactive", "i", false, "browse results in an interactive, filterable list")
-		out         = fs.StringP("output", "o", "text", "output format: text, tsv or json")
-		limit       = fs.Int("limit", 1000, "max certificates to fetch from crt.sh")
-		refresh     = fs.Bool("refresh", false, "bypass the cache and re-fetch")
-		cachePath   = fs.String("cache", defaultCachePath, "path to the result cache file")
-		cacheTTL    = fs.Duration("cache-ttl", 6*time.Hour, "how long cached results stay fresh")
-		connStr     = fs.String("crtsh", crtsh.DefaultConnString, "crt.sh PostgreSQL connection string")
+		since      = fs.String("since", "1y", "how far back to include: e.g. 90d, 6w, 3m, 1y")
+		onlyDomain = fs.Bool("only-domain", false, "match only the exact domain, not its subdomains")
+		valid      = fs.Bool("valid", false, "only show certificates that are currently valid")
+		all        = fs.Bool("all", false, "with -f txt, emit every SAN/CN, not just names matching the query")
+		limit      = fs.Int("limit", 1000, "max certificates to fetch from crt.sh")
+		refetch    = fs.Bool("refetch", false, "bypass the cache and re-fetch from crt.sh")
+		cachePath  = fs.String("cache", defaultStorePath(), "path to the cache/state file")
+		cacheTTL   = fs.Duration("cache-ttl", 24*time.Hour, "how long cached results stay fresh")
+		connStr    = fs.String("crtsh", crtsh.DefaultConnString, "crt.sh PostgreSQL connection string")
 	)
+	var interactive bool
+	fs.BoolVar(&interactive, "interactive", false, "browse results in an interactive, filterable list")
+	fs.BoolVar(&interactive, "i", false, "shorthand for -interactive")
+	var formatStr string
+	fs.StringVar(&formatStr, "format", "txt", "output format: txt (names), tsv or json")
+	fs.StringVar(&formatStr, "f", "txt", "shorthand for -format")
+	outFile := fs.String("o", "", "write results to this file instead of stdout")
+
 	if showHelp(fs, args) {
 		return nil
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	format, err := parseFormat(*out)
+	positionals, err := parseArgs(fs, args)
 	if err != nil {
 		return err
+	}
+	format, err := parseFormat(formatStr)
+	if err != nil {
+		return err
+	}
+	if *limit <= 0 {
+		return fmt.Errorf("-limit must be a positive number (got %d)", *limit)
 	}
 	cutoff, err := parseSince(*since, time.Now())
 	if err != nil {
 		return err
 	}
-	if *limit <= 0 {
-		return fmt.Errorf("--limit must be a positive number (got %d)", *limit)
-	}
 
-	cache, err := certcache.Open(*cachePath)
+	st, err := store.Open(*cachePath)
 	if err != nil {
-		return fmt.Errorf("open cache: %w", err)
+		return fmt.Errorf("open store: %w", err)
 	}
 
-	var items []certItem
-	if domain := fs.Arg(0); domain != "" {
-		domain = monitor.Normalize(domain)
-		certs, source, err := fetchCerts(ctx, cache, domain, cutoff, queryOpts{
-			Limit: *limit, Refresh: *refresh, CacheTTL: *cacheTTL, ConnString: *connStr,
+	var (
+		items  []certItem
+		match  monitor.Matcher
+		browse bool
+	)
+	if len(positionals) > 0 && positionals[0] != "" {
+		domain := monitor.Normalize(positionals[0])
+		certs, source, err := fetchCerts(ctx, st, domain, cutoff, queryOpts{
+			Limit: *limit, Refetch: *refetch, CacheTTL: *cacheTTL, ConnString: *connStr,
 		})
 		if err != nil {
 			return err
 		}
-		// crt.sh's full-text search is broader than our suffix rules, so match
-		// precisely and re-apply the window.
-		match := monitor.NewMatcher(domain, *exact)
+		// crt.sh's search is broader than our matching rules, so match precisely
+		// and re-apply the window.
+		match = monitor.NewMatcher(domain, *onlyDomain)
 		for _, c := range certs {
 			if !c.NotBefore.Before(cutoff) && (match.Covers(c.CommonName) || match.MatchNames(c.Names)) {
 				items = append(items, certItem{domain: domain, cert: c})
@@ -73,12 +88,17 @@ func runList(ctx context.Context, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "%d certificate(s) for %q since %s [%s]\n", len(items), domain, *since, source)
 	} else {
-		items = cachedItems(cache, cutoff)
+		browse = true
+		items = cachedItems(st, cutoff)
 		if len(items) == 0 {
 			fmt.Fprintln(os.Stderr, `cache is empty; run "sslmon <domain>" first`)
 			return nil
 		}
 		fmt.Fprintf(os.Stderr, "%d cached certificate(s) since %s\n", len(items), *since)
+	}
+
+	if *valid {
+		items = filterValid(items, time.Now())
 	}
 
 	// Newest first; break ties by crt.sh id so the order is deterministic for
@@ -91,22 +111,76 @@ func runList(ctx context.Context, args []string) error {
 		return a.ID > b.ID
 	})
 
-	if *interactive {
+	if interactive {
 		return runTUI(ctx, items)
 	}
-	w := newRowWriter(os.Stdout, format)
+
+	out := io.Writer(os.Stdout)
+	if *outFile != "" {
+		f, err := os.Create(*outFile)
+		if err != nil {
+			return fmt.Errorf("create output file: %w", err)
+		}
+		defer f.Close()
+		out = f
+	}
+
+	// txt is the clean, sorted, de-duplicated name list; tsv/json carry the full
+	// per-certificate record.
+	if format == formatText {
+		for _, name := range collectNames(items, match, *all || browse) {
+			fmt.Fprintln(out, name)
+		}
+		return nil
+	}
+	w := newRowWriter(out, format)
 	for _, it := range items {
 		w.write(rowFromCrtsh(it.cert))
 	}
 	return nil
 }
 
+// collectNames returns the de-duplicated, sorted set of names to print for
+// -f txt. When all is true every SAN/CN is included; otherwise only names that
+// match the query are kept (clean subdomain enumeration).
+func collectNames(items []certItem, match monitor.Matcher, all bool) []string {
+	set := map[string]struct{}{}
+	for _, it := range items {
+		for _, n := range allNames(it.cert) {
+			nn := monitor.Normalize(n)
+			if nn == "" {
+				continue
+			}
+			if all || match.Covers(nn) {
+				set[nn] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// filterValid keeps only certificates whose validity window contains now.
+func filterValid(items []certItem, now time.Time) []certItem {
+	out := items[:0]
+	for _, it := range items {
+		if currentlyValid(it.cert.NotBefore, it.cert.NotAfter, now) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // cachedItems returns every cached certificate newer than cutoff, de-duplicated
 // across domains by crt.sh id.
-func cachedItems(cache *certcache.Cache, cutoff time.Time) []certItem {
+func cachedItems(st *store.Store, cutoff time.Time) []certItem {
 	seen := map[int64]bool{}
 	var items []certItem
-	for _, e := range cache.Entries() {
+	for _, e := range st.CachedEntries() {
 		for _, c := range e.Certs {
 			if c.NotBefore.Before(cutoff) || seen[c.ID] {
 				continue
@@ -123,7 +197,7 @@ func cachedItems(cache *certcache.Cache, cutoff time.Time) []certItem {
 // months, since these windows are calendar-scale.
 func parseSince(s string, now time.Time) (time.Time, error) {
 	s = strings.TrimSpace(strings.ToLower(s))
-	invalid := fmt.Errorf("invalid --since %q (use e.g. 90d, 6w, 3m, 1y)", s)
+	invalid := fmt.Errorf("invalid -since %q (use e.g. 90d, 6w, 3m, 1y)", s)
 	if len(s) < 2 {
 		return time.Time{}, invalid
 	}
@@ -147,7 +221,7 @@ func parseSince(s string, now time.Time) (time.Time, error) {
 
 type queryOpts struct {
 	Limit      int
-	Refresh    bool
+	Refetch    bool
 	CacheTTL   time.Duration
 	ConnString string
 }
@@ -155,10 +229,10 @@ type queryOpts struct {
 // fetchCerts returns the de-duplicated certificates for domain, preferring a
 // usable cache entry and falling back to crt.sh. The source is "cache" or
 // "crt.sh".
-func fetchCerts(ctx context.Context, cache *certcache.Cache, domain string, cutoff time.Time, opts queryOpts) ([]crtsh.Cert, string, error) {
+func fetchCerts(ctx context.Context, st *store.Store, domain string, cutoff time.Time, opts queryOpts) ([]crtsh.Cert, string, error) {
 	now := time.Now()
-	if !opts.Refresh {
-		if cached, ok := cache.Lookup(domain, cutoff, now, opts.CacheTTL); ok {
+	if !opts.Refetch {
+		if cached, ok := st.Lookup(domain, cutoff, now, opts.CacheTTL); ok {
 			return cached, "cache", nil
 		}
 	}
@@ -169,7 +243,7 @@ func fetchCerts(ctx context.Context, cache *certcache.Cache, domain string, cuto
 		return nil, "", fmt.Errorf("crt.sh query: %w", err)
 	}
 	certs := dedupeCerts(raw)
-	if err := cache.Store(domain, cutoff, now, certs); err != nil {
+	if err := st.StoreCerts(domain, cutoff, now, certs); err != nil {
 		fmt.Fprintln(os.Stderr, "sslmon: cache store:", err)
 	}
 	return certs, "crt.sh", nil
@@ -225,7 +299,9 @@ func dedupeCerts(certs []crtsh.Cert) []crtsh.Cert {
 	return out
 }
 
-const (
-	defaultCachePath = "sslmon-cache.json"
-	defaultStatePath = "sslmon-state.json"
-)
+func defaultStorePath() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".sslmon.json")
+	}
+	return ".sslmon.json"
+}

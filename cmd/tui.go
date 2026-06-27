@@ -79,8 +79,24 @@ func runTUI(ctx context.Context, items []certItem) error {
 	l := list.New(listItems, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Certificates"
 	l.SetStatusBarItemName("certificate", "certificates")
+	// Plain case-insensitive substring filtering instead of the default fuzzy
+	// matcher, so "/" searches behave like grep.
+	l.Filter = substringFilter
 
 	prog := tea.NewProgram(tuiModel{list: l}, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err := prog.Run()
 	return err
+}
+
+// substringFilter is a list.FilterFunc that keeps items whose FilterValue
+// contains the search term (case-insensitive), in their original order.
+func substringFilter(term string, targets []string) []list.Rank {
+	term = strings.ToLower(term)
+	var ranks []list.Rank
+	for i, t := range targets {
+		if strings.Contains(strings.ToLower(t), term) {
+			ranks = append(ranks, list.Rank{Index: i})
+		}
+	}
+	return ranks
 }

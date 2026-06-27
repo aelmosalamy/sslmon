@@ -7,10 +7,10 @@ lists the TLS certificates that exist; ask it to `watch` and it reports new ones
 as they're issued.
 
 ```sh
-sslmon example.com               # list its certificates (last 2 years)
-sslmon example.com --since 3m    # only the last 3 months
+sslmon example.com               # matching subdomains, newest first (last year)
+sslmon example.com -since 3m     # only the last 3 months
 sslmon example.com -i            # browse them in an interactive list
-sslmon example.com -o json       # machine output for pipes
+sslmon example.com -f json       # full machine-readable records for pipes
 sslmon watch example.com         # alert me to newly-issued certs, live
 ```
 
@@ -28,6 +28,9 @@ use different sources:
 - **Watching** (`sslmon watch`) tails the CT logs directly with Google's
   official client, reporting certificates logged after it starts.
 
+Both the cache and the watch checkpoints live in a single file at
+`~/.sslmon.json` (override with `-cache`).
+
 ## Build
 
 ```sh
@@ -39,22 +42,27 @@ Requires Go 1.25+.
 ## Listing certificates
 
 ```sh
-sslmon example.com                 # last 2 years (cached after the first run)
-sslmon example.com --since 1y      # last year only
-sslmon example.com --since 90d     # last 90 days
-sslmon example.com --exact         # apex only, ignore subdomains
-sslmon example.com --refresh       # ignore the cache, re-fetch from crt.sh
+sslmon example.com                 # last year (cached after the first run)
+sslmon example.com -since 90d      # last 90 days
+sslmon example.com -only-domain    # apex only, ignore subdomains
+sslmon example.com -valid          # only certificates valid right now
+sslmon example.com -refetch        # ignore the cache, re-fetch from crt.sh
 sslmon example.com -i              # interactive, filterable list (press / to search)
 ```
 
-`--since` takes a relative window: `<N>d`, `<N>w`, `<N>m` (months) or `<N>y`.
+`-since` takes a relative window: `<N>d`, `<N>w`, `<N>m` (months) or `<N>y`
+(default `1y`). Cached results stay fresh for a day (`-cache-ttl`).
+
+`sslmon` enumerates a domain and its subdomains. Substring/keyword "wildcard
+domain discovery" (finding unrelated domains that merely mention a string) is out
+of scope — see *Known limitations*.
 
 With no domain, `sslmon` works on the local cache instead of crt.sh — handy for
 browsing everything you've collected, offline:
 
 ```sh
 sslmon -i                          # browse the whole cache interactively
-sslmon -o tsv | sort               # dump the whole cache for piping
+sslmon -f txt                      # dump every cached name, one per line
 ```
 
 (`sslmon`, `sslmon query <domain>` and `sslmon list <domain>` are all accepted;
@@ -64,35 +72,45 @@ the bare form is just the default.)
 
 ```sh
 sslmon watch example.com           # tail logs until Ctrl-C
-sslmon watch example.com --once    # catch up since last run and exit (cron)
-sslmon watch example.com --logs cloudflare,google   # only some operators
+sslmon watch example.com -once     # catch up since last run and exit (cron)
+sslmon watch example.com -logs cloudflare,google   # only some operators
 ```
 
 On first run `watch` records each log's current size and reports only
-certificates logged after that. A checkpoint file lets `--once` resume exactly
-where it left off. A log that returns HTTP 429 is paced down (not hammered)
-rather than retried hard.
+certificates logged after that. The checkpoints in `~/.sslmon.json` let `-once`
+resume exactly where it left off. A log that returns HTTP 429 is paced down (not
+hammered) rather than retried hard.
 
 ## Output and piping
 
-Every listing command takes `--output`/`-o` (`text`, `tsv`, or `json`).
-Progress goes to stderr and only certificate data to stdout, so pipelines stay
-clean. TSV is headerless: `not_before`, `not_after`, `name`, `names`, `issuer`,
-`source`, `reference`, `fingerprint`.
+Choose the format with `-f`/`-format`:
+
+- **`txt`** (default) — a clean, sorted, de-duplicated list of names, one per
+  line. By default just the names matching your query (subdomain enumeration);
+  add `-all` to emit every SAN/CN on the matched certificates.
+- **`tsv`** — one headerless line per certificate: `not_before`, `not_after`,
+  `name`, `names`, `issuer`, `source`, `reference`, `fingerprint`.
+- **`json`** — newline-delimited JSON, one full record per certificate.
+
+`-o <file>` writes results to a file instead of stdout. Progress goes to stderr
+and only certificate data to stdout, so pipelines stay clean.
 
 ```sh
-# certificates per issuer
-sslmon example.com -o tsv | cut -f5 | sort | uniq -c | sort -rn
+# a clean subdomain list
+sslmon example.com                 # (txt is the default)
 
-# unique names across everything cached
-sslmon -o tsv | cut -f4 | tr ',' '\n' | sort -u
+# every name on every matched cert
+sslmon example.com -all
+
+# certificates per issuer
+sslmon example.com -f tsv | cut -f5 | sort | uniq -c | sort -rn
 
 # certs expiring before a date, as JSON
-sslmon example.com -o json | jq 'select(.not_after < "2026-09-01")'
+sslmon example.com -f json | jq 'select(.not_after < "2026-09-01")'
 ```
 
-Flags are GNU-style (`--long` or `-o`) and may appear before or after the
-domain.
+Flags use Go's standard `flag` package (`-flag` or `--flag`) and may appear
+before or after the domain.
 
 ## Layout
 
@@ -103,13 +121,13 @@ cmd/                     the CLI
   list.go                default action: list / browse (crt.sh + cache)
   watch.go               watch command
   logs.go                logs command
-  output.go              unified Row + text/tsv/json writers
+  output.go              unified Row + txt/tsv/json writers
   tui.go                 the Bubble Tea interactive list
-internal/crtsh           crt.sh PostgreSQL client (pgx, fast CTE query)
-internal/certcache       cache crt.sh results in a local JSON file
+internal/crtsh           crt.sh PostgreSQL client (pgx, fast indexed query)
+internal/store           single JSON file: crt.sh cache + watch checkpoints
+internal/atomicfile      atomic (temp-file + rename) file writes
 internal/loglist         fetch the Chrome CT log list, select usable RFC 6962 logs
 internal/monitor         tail logs, parse entries, match the domain (the engine)
-internal/state           persist per-log checkpoints to a JSON file
 ```
 
 ## Known limitations
@@ -119,6 +137,12 @@ internal/state           persist per-log checkpoints to a JSON file
   that cancels slow queries. `sslmon` keeps the query fast, retries on failure,
   and caches results — but a cold lookup can still occasionally fail. Watch mode
   uses only the official CT log client.
+- **No keyword/substring domain discovery.** `sslmon` finds the queried domain
+  and its subdomains, not unrelated domains that merely contain a keyword. crt.sh's
+  public endpoints can't serve substring search reliably (the Postgres standby
+  has no substring index and cancels the scan; the web API times out on popular
+  keywords), so it's intentionally left to dedicated tooling (e.g. a paid CT API
+  like Censys or SecurityTrails).
 - **Tiled logs are not watched.** Newer "static CT API" (tiled) logs use a
   different protocol than RFC 6962; watch mode tails every *usable RFC 6962* log
   and skips tiled ones. (Listing is unaffected — crt.sh indexes them.)

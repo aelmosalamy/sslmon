@@ -19,7 +19,7 @@ func runLogs(ctx context.Context, args []string) error {
 	if showHelp(fs, args) {
 		return nil
 	}
-	if err := fs.Parse(args); err != nil {
+	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
 
