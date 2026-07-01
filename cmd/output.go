@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"sslmon/internal/crtsh"
-	"sslmon/internal/monitor"
+	"github.com/aelmosalamy/sslmon/internal/crtsh"
+	"github.com/aelmosalamy/sslmon/internal/monitor"
 )
 
 // Row is the unified output shape for a certificate, whether it came from a

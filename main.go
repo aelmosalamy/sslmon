@@ -8,7 +8,7 @@ package main
 import (
 	"os"
 
-	"sslmon/cmd"
+	"github.com/aelmosalamy/sslmon/cmd"
 )
 
 func main() {

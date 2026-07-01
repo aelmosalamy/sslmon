@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"sslmon/internal/atomicfile"
-	"sslmon/internal/crtsh"
+	"github.com/aelmosalamy/sslmon/internal/atomicfile"
+	"github.com/aelmosalamy/sslmon/internal/crtsh"
 )
 
 // cacheEntry is the cached result of one domain query.

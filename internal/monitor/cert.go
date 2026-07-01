@@ -8,7 +8,7 @@ import (
 	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/x509"
 
-	"sslmon/internal/loglist"
+	"github.com/aelmosalamy/sslmon/internal/loglist"
 )
 
 // Cert is a flattened, serialisable view of a single certificate observed in a

@@ -31,13 +31,24 @@ use different sources:
 Both the cache and the watch checkpoints live in a single file at
 `~/.sslmon.json` (override with `-cache`).
 
-## Build
+## Install
+
+With Go 1.25+ installed, one command puts `sslmon` on your `PATH`:
 
 ```sh
-go build -o sslmon .
+go install github.com/aelmosalamy/sslmon@latest
 ```
 
-Requires Go 1.25+.
+Re-run the same command any time to update to the latest release. (Make sure
+`$(go env GOPATH)/bin` is on your `PATH`.)
+
+Or build from a clone:
+
+```sh
+git clone https://github.com/aelmosalamy/sslmon
+cd sslmon
+go build -o sslmon .
+```
 
 ## Listing certificates
 

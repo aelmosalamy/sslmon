@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"sslmon/internal/crtsh"
-	"sslmon/internal/monitor"
-	"sslmon/internal/store"
+	"github.com/aelmosalamy/sslmon/internal/crtsh"
+	"github.com/aelmosalamy/sslmon/internal/monitor"
+	"github.com/aelmosalamy/sslmon/internal/store"
 )
 
 // runList is sslmon's default action. With a domain it lists that domain's

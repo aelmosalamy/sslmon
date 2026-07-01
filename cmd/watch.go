@@ -9,9 +9,9 @@ import (
 	"os"
 	"time"
 
-	"sslmon/internal/loglist"
-	"sslmon/internal/monitor"
-	"sslmon/internal/store"
+	"github.com/aelmosalamy/sslmon/internal/loglist"
+	"github.com/aelmosalamy/sslmon/internal/monitor"
+	"github.com/aelmosalamy/sslmon/internal/store"
 )
 
 func runWatch(ctx context.Context, args []string) error {

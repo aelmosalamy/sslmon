@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"sslmon/internal/crtsh"
+	"github.com/aelmosalamy/sslmon/internal/crtsh"
 )
 
 func newTestStore(t *testing.T) *Store {

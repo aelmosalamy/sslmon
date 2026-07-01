@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"sslmon/internal/loglist"
+	"github.com/aelmosalamy/sslmon/internal/loglist"
 )
 
 func runLogs(ctx context.Context, args []string) error {

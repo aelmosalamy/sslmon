@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"sslmon/internal/crtsh"
+	"github.com/aelmosalamy/sslmon/internal/crtsh"
 )
 
 // certItem adapts a cached certificate to the bubbles/list interface. The

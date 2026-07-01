@@ -22,7 +22,7 @@ import (
 	"github.com/google/certificate-transparency-go/jsonclient"
 	"github.com/google/certificate-transparency-go/x509"
 
-	"sslmon/internal/loglist"
+	"github.com/aelmosalamy/sslmon/internal/loglist"
 )
 
 // Checkpoints records how far each CT log has been read. It is satisfied by

@@ -1,4 +1,4 @@
-module sslmon
+module github.com/aelmosalamy/sslmon
 
 go 1.25.0
 
